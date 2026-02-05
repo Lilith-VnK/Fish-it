@@ -47,8 +47,7 @@ local CONFIG_FILE = CONFIG_FOLDER .. "/config_" .. LocalPlayer.UserId .. ".json"
 local DefaultConfig = {
     AutoFish = false,
     AutoSell = false,
-    AutoCatch = false,
-    GPUSaver = false,
+    AutoCatch = false,    GPUSaver = false,
     BlatantMode = false,
     GhostMode = false,
     ChaosMode = false,
@@ -97,8 +96,7 @@ local function saveConfig()
     pcall(function()
         writefile(CONFIG_FILE, HttpService:JSONEncode(Config))
         print("[Config] Settings saved!")
-    end)
-end
+    end)end
 
 local function loadConfig()
     if not readfile or not isfile or not isfile(CONFIG_FILE) then return end
@@ -114,68 +112,114 @@ end
 loadConfig()
 
 -- ====================================================================
---                     NETWORK EVENTS (FIXED)
+--                     NETWORK EVENTS (WITH FALLBACK)
 -- ====================================================================
-local function getNetworkEvents()
-    local packagesFolder = ReplicatedStorage:WaitForChild("Packages", 5)
-    if not packagesFolder then
-        warn("[Network] ❌ Packages folder not found!")
-        return {}
-    end
+local Events = {}
 
-    -- Coba cari paket dengan nama "sleitnick_net" (versi apa pun)
-    local netModule = nil
-    for _, child in ipairs(packagesFolder:GetChildren()) do
-        if child:IsA("ModuleScript") and child.Name:match("^sleitnick_net@") then
-            netModule = require(child)
-            break
-        end
+-- Safe function to get RemoteEvent
+local function getRemoteEvent(name)
+    local success, event = pcall(function()
+        return ReplicatedStorage:WaitForChild(name, 2)
+    end)
+    if success and event and event:IsA("RemoteEvent") then
+        return event
     end
-
-    if not netModule then
-        warn("[Network] ❌ sleitnick_net module not found in Packages")
-        return {}
-    end
-
-    -- Pastikan netModule memiliki struktur yang diharapkan
-    local net = netModule.net or netModule
-    if not net then
-        warn("[Network] ❌ net object not found in sleitnick_net module")
-        return {}
-    end
-
-    -- Ambil event dengan safe-check
-    local function safeWaitForChild(parent, name)
-        if not parent then return nil end
-        local child = parent:FindFirstChild(name)
-        if child then return child end
-        -- Jika tidak ditemukan, coba tunggu sebentar (fallback)
-        for _ = 1, 3 do
-            task.wait(0.1)
-            child = parent:FindFirstChild(name)
-            if child then return child end
-        end
-        return nil
-    end
-
-    return {
-        fishing = safeWaitForChild(net, "RE/FishingCompleted"),
-        sell = safeWaitForChild(net, "RF/SellAllItems"),
-        charge = safeWaitForChild(net, "RF/ChargeFishingRod"),
-        minigame = safeWaitForChild(net, "RF/RequestFishingMinigameStarted"),
-        cancel = safeWaitForChild(net, "RF/CancelFishingInputs"),
-        equip = safeWaitForChild(net, "RE/EquipToolFromHotbar"),
-        unequip = safeWaitForChild(net, "RE/UnequipToolFromHotbar"),
-        favorite = safeWaitForChild(net, "RE/FavoriteItem")
-    }
+    return nil
 end
 
-local Events = getNetworkEvents()
+-- Safe function to get RemoteFunction
+local function getRemoteFunction(name)
+    local success, func = pcall(function()
+        return ReplicatedStorage:WaitForChild(name, 2)
+    end)
+    if success and func and func:IsA("RemoteFunction") then
+        return func
+    end
+    return nil
+end
 
--- Validasi setelah load
-if not Events.fishing or not Events.equip then
-    warn("[Critical] Network events incomplete! Some features may not work.")
-    print("💡 Try: Rejoin, wait for Packages to load, or check if sleitnick_net is installed.")
+-- Attempt to find known event names
+Events.equip = getRemoteEvent("EquipToolFromHotbar") or getRemoteEvent("EquipTool") or getRemoteEvent("UseTool")
+Events.unequip = getRemoteEvent("UnequipToolFromHotbar") or getRemoteEvent("UnequipTool")
+Events.charge = getRemoteFunction("ChargeFishingRod") or getRemoteEvent("ChargeFishingRod")
+Events.minigame = getRemoteFunction("RequestFishingMinigameStarted") or getRemoteEvent("StartFishingMinigame")
+Events.fishing = getRemoteEvent("FishingCompleted") or getRemoteEvent("ReelIn")
+Events.sell = getRemoteFunction("SellAllItems") or getRemoteEvent("SellAll")
+Events.favorite = getRemoteEvent("FavoriteItem") or getRemoteEvent("ToggleFavorite")
+-- Validate Events
+local eventsAvailable = false
+if Events.equip then
+    print("[Network] ✅ Found equip event")
+    eventsAvailable = true
+end
+if Events.fishing then
+    print("[Network] ✅ Found fishing event")
+    eventsAvailable = true
+end
+if not eventsAvailable then
+    warn("[Network] ❌ No network events found — using manual fallback methods!")
+end
+
+-- ====================================================================
+--                     MANUAL FALLBACK ACTIONS (if no Events)
+-- ====================================================================
+local function manualEquip()
+    if Events.equip then
+        Events.equip:FireServer(1)
+    else
+        warn("[Manual] No equip event — skipping")
+    end
+end
+
+local function manualCharge(chargeValue)
+    if Events.charge then
+        if Events.charge.InvokeServer then
+            Events.charge:InvokeServer(chargeValue)
+        else
+            Events.charge:FireServer(chargeValue)
+        end
+    else
+        warn("[Manual] No charge event — skipping")
+    end
+end
+
+local function manualMinigame(minigameValue, arg2)
+    if Events.minigame then
+        if Events.minigame.InvokeServer then
+            Events.minigame:InvokeServer(minigameValue, arg2)
+        else
+            Events.minigame:FireServer(minigameValue, arg2)
+        end
+    else
+        warn("[Manual] No minigame event — skipping")
+    end
+end
+local function manualReel()
+    if Events.fishing then
+        Events.fishing:FireServer()
+    else
+        warn("[Manual] No fishing event — skipping")
+    end
+end
+
+local function manualSell()
+    if Events.sell then
+        if Events.sell.InvokeServer then
+            return Events.sell:InvokeServer()
+        else
+            Events.sell:FireServer()
+        end
+    else
+        warn("[Manual] No sell event — skipping")
+    end
+end
+
+local function manualFavorite(uuid)
+    if Events.favorite then
+        Events.favorite:FireServer(uuid)
+    else
+        warn("[Manual] No favorite event — skipping")
+    end
 end
 
 -- ====================================================================
@@ -199,8 +243,7 @@ local RarityTiers = {
 }
 
 local function getRarityValue(rarity)
-    return RarityTiers[rarity] or 0
-end
+    return RarityTiers[rarity] or 0end
 
 local function getFishRarity(itemData)
     if not itemData or not itemData.Data then return "Common" end
@@ -244,16 +287,12 @@ local function enableGPU()
     gpuActive = true
 
     pcall(function()
-        -- Set rendering quality to lowest
         settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
         game.Lighting.GlobalShadows = false
         game.Lighting.FogEnd = 1
-        -- Optional: Reduce particle effects
         game:GetService("RunService"):SetSendRobloxAnalytics(false)
         setfpscap(8)
     end)
-
-    -- Create minimal UI overlay
     whiteScreen = Instance.new("ScreenGui")
     whiteScreen.Name = "GPUSaverOverlay"
     whiteScreen.ResetOnSpawn = false
@@ -262,7 +301,7 @@ local function enableGPU()
 
     local mainFrame = Instance.new("Frame")
     mainFrame.Size = UDim2.new(1, 0, 1, 0)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25) -- Dark gray background
+    mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
     mainFrame.BorderSizePixel = 0
     mainFrame.Parent = whiteScreen
 
@@ -302,8 +341,7 @@ local function enableGPU()
     hintLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
     hintLabel.TextSize = 14
     hintLabel.Font = Enum.Font.Gotham
-    hintLabel.TextYAlignment = Enum.TextYAlignment.Top
-    hintLabel.Parent = container
+    hintLabel.TextYAlignment = Enum.TextYAlignment.Top    hintLabel.Parent = container
 
     whiteScreen.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 
@@ -315,7 +353,6 @@ local function disableGPU()
     gpuActive = false
 
     pcall(function()
-        -- Restore original settings
         settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
         game.Lighting.GlobalShadows = true
         game.Lighting.FogEnd = 100000
@@ -353,14 +390,17 @@ local function isItemFavorited(uuid)
             if item.UUID == uuid then
                 return item.Favorited == true
             end
-        end
-        return false
+        end        return false
     end)
     return success and result or false
 end
 
 local function autoFavoriteByRarity()
     if not Config.AutoFavorite then return end
+    if not Events.favorite then
+        warn("[Auto Favorite] ❌ No favorite event available — skipping")
+        return
+    end
     
     local targetRarity = Config.FavoriteRarity
     local targetValue = getRarityValue(targetRarity)
@@ -386,7 +426,7 @@ local function autoFavoriteByRarity()
                 
                 if rarityValue >= targetValue and rarityValue >= 6 then
                     if not isItemFavorited(item.UUID) and not favoritedItems[item.UUID] then
-                        Events.favorite:FireServer(item.UUID)
+                        manualFavorite(item.UUID)
                         favoritedItems[item.UUID] = true
                         favorited = favorited + 1
                         print("[Auto Favorite] ⭐ #" .. favorited .. " - " .. itemName .. " (" .. rarity .. ")")
@@ -399,8 +439,7 @@ local function autoFavoriteByRarity()
         end
     end)
     
-    if favorited > 0 then
-        print("[Auto Favorite] ✅ Complete! Favorited: " .. favorited)
+    if favorited > 0 then        print("[Auto Favorite] ✅ Complete! Favorited: " .. favorited)
     end
 end
 
@@ -414,29 +453,10 @@ task.spawn(function()
 end)
 
 -- ====================================================================
---                     FISHING LOGIC (FROM YOUR test.lua)
+--                     FISHING LOGIC
 -- ====================================================================
 local isFishing = false
 local fishingActive = false
-
--- Helper functions
-local function castRod()
-    pcall(function()
-        Events.equip:FireServer(1)
-        task.wait(0.05)
-        Events.charge:InvokeServer(1755848498.4834)
-        task.wait(0.02)
-        Events.minigame:InvokeServer(1.2854545116425, 1)
-        print("[Fishing] 🎣 Cast")
-    end)
-end
-
-local function reelIn()
-    pcall(function()
-        Events.fishing:FireServer()
-        print("[Fishing] ✅ Reel")
-    end)
-end
 
 -- BLATANT MODE: Your exact implementation
 local function blatantFishingLoop()
@@ -446,34 +466,31 @@ local function blatantFishingLoop()
             
             -- Step 1: Rapid fire casts (2 parallel casts)
             pcall(function()
-                Events.equip:FireServer(1)
+                manualEquip()
                 task.wait(0.01)
                 
                 -- Cast 1
                 task.spawn(function()
-                    Events.charge:InvokeServer(1755848498.4834)
+                    manualCharge(1755848498.4834)
                     task.wait(0.01)
-                    Events.minigame:InvokeServer(1.2854545116425, 1)
+                    manualMinigame(1.2854545116425, 1)
                 end)
                 
                 task.wait(0.05)
                 
                 -- Cast 2 (overlapping)
                 task.spawn(function()
-                    Events.charge:InvokeServer(1755848498.4834)
+                    manualCharge(1755848498.4834)
                     task.wait(0.01)
-                    Events.minigame:InvokeServer(1.2854545116425, 1)
+                    manualMinigame(1.2854545116425, 1)
                 end)
             end)
             
             -- Step 2: Wait for fish to bite
             task.wait(Config.FishDelay)
-            
-            -- Step 3: Spam reel 5x to instant catch
+                        -- Step 3: Spam reel 5x to instant catch
             for i = 1, 5 do
-                pcall(function() 
-                    Events.fishing:FireServer() 
-                end)
+                pcall(manualReel)
                 task.wait(0.01)
             end
             
@@ -498,17 +515,17 @@ local function ghostFishingLoop()
             task.spawn(function()
                 pcall(function()
                     -- Equip rod
-                    Events.equip:FireServer(1)
+                    manualEquip()
 
                     -- Cast, charge, and mini-game in rapid succession
-                    Events.charge:InvokeServer(1755848498.4834)
+                    manualCharge(1755848498.4834)
                     task.wait(0.005) -- Minimum delay
-                    Events.minigame:InvokeServer(1.2854545116425, 1)
+                    manualMinigame(1.2854545116425, 1)
 
                     -- Instantly reel after a near-zero delay
                     task.wait(0.01)
                     for _ = 1, 5 do
-                        Events.fishing:FireServer()
+                        manualReel()
                         task.wait(0.005) -- Faster reel spam
                     end
                 end)
@@ -520,8 +537,7 @@ local function ghostFishingLoop()
             isFishing = false
             print("[Ghost] 🕵️ Silent cycle complete")
         else
-            task.wait(0.05) -- Low CPU usage when waiting
-        end
+            task.wait(0.05) -- Low CPU usage when waiting        end
     end
 end
 
@@ -540,11 +556,11 @@ local function chaosFishingLoop()
             task.spawn(function()
                 for i = 1, 3 do
                     pcall(function()
-                        Events.equip:FireServer(1)
+                        manualEquip()
                         task.wait(Random:NextNumber(0.005, 0.02))
-                        Events.charge:InvokeServer(1755848498.4834)
+                        manualCharge(1755848498.4834)
                         task.wait(Random:NextNumber(0.005, 0.015))
-                        Events.minigame:InvokeServer(1.2854545116425, 1)
+                        manualMinigame(1.2854545116425, 1)
                     end)
                 end
             end)
@@ -553,9 +569,7 @@ local function chaosFishingLoop()
 
             -- Aggressive reel spam with randomized intervals
             for i = 1, math.random(4, 6) do
-                pcall(function()
-                    Events.fishing:FireServer()
-                end)
+                pcall(manualReel)
                 task.wait(Random:NextNumber(0.008, 0.02))
             end
 
@@ -571,13 +585,15 @@ end
 
 -- NORMAL MODE: Your exact implementation
 local function normalFishingLoop()
-    while fishingActive and not Config.BlatantMode do
-        if not isFishing then
-            isFishing = true
+    while fishingActive and not Config.BlatantMode and not Config.GhostMode and not Config.ChaosMode do
+        if not isFishing then            isFishing = true
             
-            castRod()
+            manualEquip()
+            manualCharge(1755848498.4834)
+            task.wait(0.02)
+            manualMinigame(1.2854545116425, 1)
             task.wait(Config.FishDelay)
-            reelIn()
+            manualReel()
             task.wait(Config.CatchDelay)
             
             isFishing = false
@@ -592,6 +608,10 @@ local function fishingLoop()
     while fishingActive do
         if Config.BlatantMode then
             blatantFishingLoop()
+        elseif Config.GhostMode then
+            ghostFishingLoop()
+        elseif Config.ChaosMode then
+            chaosFishingLoop()
         else
             normalFishingLoop()
         end
@@ -604,10 +624,8 @@ end
 -- ====================================================================
 task.spawn(function()
     while true do
-        if Config.AutoCatch and not isFishing then
-            pcall(function() 
-                Events.fishing:FireServer() 
-            end)
+        if Config.AutoCatch and not isFishing and Events.fishing then
+            pcall(manualReel)
         end
         task.wait(Config.CatchDelay)
     end
@@ -617,20 +635,23 @@ end)
 --                     AUTO SELL
 -- ====================================================================
 local function simpleSell()
+    if not Events.sell then        warn("[Auto Sell] ❌ No sell event available — skipping")
+        return
+    end
+
     print("╔═══════════════════════════════════╗")
     print("[Auto Sell] 💰 Selling all non-favorited items...")
     
-    local sellSuccess = pcall(function()
-        return Events.sell:InvokeServer()
+    local success, result = pcall(function()
+        return manualSell()
     end)
     
-    if sellSuccess then
+    if success then
         print("[Auto Sell] ✅ SOLD! (Favorited fish kept safe)")
-        print("╚═══════════════════════════════════╝")
     else
-        warn("[Auto Sell] ❌ Sell failed")
-        print("╚═══════════════════════════════════╝")
+        warn("[Auto Sell] ❌ Sell failed:", tostring(result))
     end
+    print("╚═══════════════════════════════════╝")
 end
 
 task.spawn(function()
@@ -663,8 +684,7 @@ MainTab:CreateSection("Auto Fishing")
 
 -- Toggle untuk Ghost Mode
 local GhostToggle = MainTab:CreateToggle({
-    Name = "🕵️ GHOST MODE (Silent & Fast)",
-    CurrentValue = Config.GhostMode or false,
+    Name = "🕵️ GHOST MODE (Silent & Fast)",    CurrentValue = Config.GhostMode or false,
     Callback = function(value)
         Config.GhostMode = value
         -- Matikan mode lain saat ini aktif
@@ -708,19 +728,26 @@ local AutoFishToggle = MainTab:CreateToggle({
                               Config.BlatantMode and "(BLATANT MODE)" or 
                               "(Normal)"
             print("[Auto Fish] 🟢 Started " .. activeMode)
-            
-            -- Jalankan loop berdasarkan mode aktif
-            if Config.GhostMode then                task.spawn(ghostFishingLoop)
+
+            -- Check if any network events are available
+            if not Events.equip then
+                warn("[Auto Fish] ⚠️ No network events found — using manual fallback!")
+            end
+                        -- Jalankan loop berdasarkan mode aktif
+            if Config.GhostMode then
+                task.spawn(ghostFishingLoop)
             elseif Config.ChaosMode then
                 task.spawn(chaosFishingLoop)
             elseif Config.BlatantMode then
-                task.spawn(blatantFishingLoop) -- Jika mode lama masih digunakan
+                task.spawn(blatantFishingLoop)
             else
                 task.spawn(fishingLoop) -- Loop normal
             end
         else
             print("[Auto Fish] 🔴 Stopped")
-            pcall(function() Events.unequip:FireServer() end)
+            pcall(function()
+                if Events.unequip then Events.unequip:FireServer() end
+            end)
         end
         
         saveConfig()
@@ -755,11 +782,11 @@ MainTab:CreateInput({
     end
 })
 
--- Input untuk Catch Delay
-MainTab:CreateInput({
+-- Input untuk Catch DelayMainTab:CreateInput({
     Name = "Catch Delay (seconds)",
     PlaceholderText = "Default: 0.2",
-    RemoveTextAfterFocusLost = false,    Callback = function(value)
+    RemoveTextAfterFocusLost = false,
+    Callback = function(value)
         local num = tonumber(value)
         if num and num >= 0.1 and num <= 10 then
             Config.CatchDelay = num
@@ -805,7 +832,6 @@ MainTab:CreateButton({
         simpleSell()
     end
 })
-
 -- ====== TELEPORT TAB (from dev1.lua) ======
 local TeleportTab = Window:CreateTab("🌍 Teleport", nil)
 
@@ -854,8 +880,7 @@ local AutoFavoriteToggle = SettingsTab:CreateToggle({
 local FavoriteRarityDropdown = SettingsTab:CreateDropdown({
     Name = "Favorite Rarity (Mythic/Secret Only)",
     Options = {"Mythic", "Secret"},
-    CurrentOption = Config.FavoriteRarity,
-    Callback = function(option)
+    CurrentOption = Config.FavoriteRarity,    Callback = function(option)
         Config.FavoriteRarity = option
         print("[Config] Favorite rarity set to: " .. option .. "+")
         saveConfig()
@@ -904,8 +929,7 @@ How it's faster:
     ]]
 })
 
--- ====== STARTUP ======
-Rayfield:Notify({
+-- ====== STARTUP ======Rayfield:Notify({
     Title = "Auto Fish Loaded",
     Content = "Ready to fish!",
     Duration = 5,
@@ -913,7 +937,7 @@ Rayfield:Notify({
 })
 
 print("🎣 Auto Fish V4.0 - Loaded!")
-print("✅ Using YOUR working fishing method")
-print("✅ Blatant Mode available")
-print("✅ Teleport system from dev1.lua integrated")
+print("✅ Using safe network event detection")
+print("✅ Manual fallback methods available")
+print("✅ Sleitnick_net dependency removed")
 print("Ready to fish!")
