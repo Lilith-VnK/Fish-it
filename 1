@@ -114,23 +114,69 @@ end
 loadConfig()
 
 -- ====================================================================
---                     NETWORK EVENTS
+--                     NETWORK EVENTS (FIXED)
 -- ====================================================================
 local function getNetworkEvents()
-    local net = ReplicatedStorage.Packages._Index["sleitnick_net@0.2.0"].net
+    local packagesFolder = ReplicatedStorage:WaitForChild("Packages", 5)
+    if not packagesFolder then
+        warn("[Network] ❌ Packages folder not found!")
+        return {}
+    end
+
+    -- Coba cari paket dengan nama "sleitnick_net" (versi apa pun)
+    local netModule = nil
+    for _, child in ipairs(packagesFolder:GetChildren()) do
+        if child:IsA("ModuleScript") and child.Name:match("^sleitnick_net@") then
+            netModule = require(child)
+            break
+        end
+    end
+
+    if not netModule then
+        warn("[Network] ❌ sleitnick_net module not found in Packages")
+        return {}
+    end
+
+    -- Pastikan netModule memiliki struktur yang diharapkan
+    local net = netModule.net or netModule
+    if not net then
+        warn("[Network] ❌ net object not found in sleitnick_net module")
+        return {}
+    end
+
+    -- Ambil event dengan safe-check
+    local function safeWaitForChild(parent, name)
+        if not parent then return nil end
+        local child = parent:FindFirstChild(name)
+        if child then return child end
+        -- Jika tidak ditemukan, coba tunggu sebentar (fallback)
+        for _ = 1, 3 do
+            task.wait(0.1)
+            child = parent:FindFirstChild(name)
+            if child then return child end
+        end
+        return nil
+    end
+
     return {
-        fishing = net:WaitForChild("RE/FishingCompleted"),
-        sell = net:WaitForChild("RF/SellAllItems"),
-        charge = net:WaitForChild("RF/ChargeFishingRod"),
-        minigame = net:WaitForChild("RF/RequestFishingMinigameStarted"),
-        cancel = net:WaitForChild("RF/CancelFishingInputs"),
-        equip = net:WaitForChild("RE/EquipToolFromHotbar"),
-        unequip = net:WaitForChild("RE/UnequipToolFromHotbar"),
-        favorite = net:WaitForChild("RE/FavoriteItem")
+        fishing = safeWaitForChild(net, "RE/FishingCompleted"),
+        sell = safeWaitForChild(net, "RF/SellAllItems"),
+        charge = safeWaitForChild(net, "RF/ChargeFishingRod"),
+        minigame = safeWaitForChild(net, "RF/RequestFishingMinigameStarted"),
+        cancel = safeWaitForChild(net, "RF/CancelFishingInputs"),
+        equip = safeWaitForChild(net, "RE/EquipToolFromHotbar"),
+        unequip = safeWaitForChild(net, "RE/UnequipToolFromHotbar"),
+        favorite = safeWaitForChild(net, "RE/FavoriteItem")
     }
 end
 
 local Events = getNetworkEvents()
+
+-- Validasi setelah load
+if not Events.fishing or not Events.equip then
+    warn("[Critical] Network events incomplete! Some features may not work.")
+    print("💡 Try: Rejoin, wait for Packages to load, or check if sleitnick_net is installed.")
+end
 
 -- ====================================================================
 --                     MODULES FOR AUTO FAVORITE
